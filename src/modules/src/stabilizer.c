@@ -47,6 +47,7 @@
 #include "estimator.h"
 #endif
 
+static const float rotationAngle = -0.78539816339; // -45 deg
 static bool isInit;
 static bool emergencyStop = false;
 static int emergencyStopTimeout = EMERGENCY_STOP_TIMEOUT_DISABLED;
@@ -58,6 +59,8 @@ static state_t state;
 static control_t control;
 
 static void stabilizerTask(void* param);
+static void rotateSensorData(sensorData_t *sensors, const float radian);
+static void rotateAxis3f(Axis3f *to, const Axis3f from, const float radian);
 
 void stabilizerInit(void)
 {
@@ -131,6 +134,7 @@ static void stabilizerTask(void* param)
     stateEstimatorUpdate(&state, &sensorData, &control);
 #else
     sensorsAcquire(&sensorData, tick);
+    rotateSensorData(&sensorData, rotationAngle);
     stateEstimator(&state, &sensorData, tick);
 #endif
 
@@ -166,6 +170,23 @@ void stabilizerSetEmergencyStopTimeout(int timeout)
 {
   emergencyStop = false;
   emergencyStopTimeout = timeout;
+}
+
+static void rotateSensorData(sensorData_t *sensors, const float radian)
+{
+	rotateAxis3f(&sensors->acc, sensors->acc, radian);
+	rotateAxis3f(&sensors->gyro, sensors->gyro, radian);
+	rotateAxis3f(&sensors->mag, sensors->mag, radian);
+}
+
+static void rotateAxis3f(Axis3f *to, const Axis3f from, const float radian)
+{
+	const float ct = cos(radian);
+	const float st = sin(radian);
+
+	(*to).x = ct*from.x + st*from.y;
+	(*to).y = -st*from.x + ct*from.y;
+	(*to).z = from.z;
 }
 
 LOG_GROUP_START(ctrltarget)
