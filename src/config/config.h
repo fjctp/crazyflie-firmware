@@ -50,7 +50,7 @@
 
 #ifdef STM32F4XX
   #define P_NAME "Crazyflie 2.0"
-  #define QUAD_FORMATION_X
+//  #define QUAD_FORMATION_X
 
   #define CONFIG_BLOCK_ADDRESS    (2048 * (64-1))
   #define MCU_ID_ADDRESS          0x1FFF7A10
