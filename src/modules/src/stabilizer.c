@@ -39,7 +39,7 @@
 #include "crtp_localization_service.h"
 #include "sitaw.h"
 #include "controller.h"
-#include "power_distribution.h"
+//#include "power_distribution.h"
 
 #ifdef ESTIMATOR_TYPE_kalman
 #include "estimator_kalman.h"
@@ -47,7 +47,7 @@
 #include "estimator.h"
 #endif
 
-static const float rotationAngle = -0.78539816339; // -45 deg
+static const float rotationAngleZ = -0.78539816339; // -45 deg
 static bool isInit;
 static bool emergencyStop = false;
 static int emergencyStopTimeout = EMERGENCY_STOP_TIMEOUT_DISABLED;
@@ -59,8 +59,8 @@ static state_t state;
 static control_t control;
 
 static void stabilizerTask(void* param);
-static void rotateSensorData(sensorData_t *sensors, const float radian);
-static void rotateAxis3f(Axis3f *to, const Axis3f from, const float radian);
+static void rotateSensorDataZ(sensorData_t *sensors, const float radian);
+static void rotateAxis3fZ(Axis3f *to, const Axis3f from, const float radian);
 
 void stabilizerInit(void)
 {
@@ -70,7 +70,7 @@ void stabilizerInit(void)
   sensorsInit();
   stateEstimatorInit();
   stateControllerInit();
-  powerDistributionInit();
+  //powerDistributionInit();
 #if defined(SITAW_ENABLED)
   sitAwInit();
 #endif
@@ -88,7 +88,7 @@ bool stabilizerTest(void)
   pass &= sensorsTest();
   pass &= stateEstimatorTest();
   pass &= stateControllerTest();
-  pass &= powerDistributionTest();
+  //pass &= powerDistributionTest();
 
   return pass;
 }
@@ -134,7 +134,7 @@ static void stabilizerTask(void* param)
     stateEstimatorUpdate(&state, &sensorData, &control);
 #else
     sensorsAcquire(&sensorData, tick);
-    rotateSensorData(&sensorData, rotationAngle);
+    rotateSensorDataZ(&sensorData, rotationAngleZ);
     stateEstimator(&state, &sensorData, tick);
 #endif
 
@@ -149,7 +149,7 @@ static void stabilizerTask(void* param)
     if (emergencyStop) {
       powerStop();
     } else {
-      powerDistribution(&control);
+      //powerDistribution(&control);
     }
 
     tick++;
@@ -172,14 +172,14 @@ void stabilizerSetEmergencyStopTimeout(int timeout)
   emergencyStopTimeout = timeout;
 }
 
-static void rotateSensorData(sensorData_t *sensors, const float radian)
+static void rotateSensorDataZ(sensorData_t *sensors, const float radian)
 {
-	rotateAxis3f(&sensors->acc, sensors->acc, radian);
-	rotateAxis3f(&sensors->gyro, sensors->gyro, radian);
-	rotateAxis3f(&sensors->mag, sensors->mag, radian);
+	rotateAxis3fZ(&sensors->acc, sensors->acc, radian);
+	rotateAxis3fZ(&sensors->gyro, sensors->gyro, radian);
+	rotateAxis3fZ(&sensors->mag, sensors->mag, radian);
 }
 
-static void rotateAxis3f(Axis3f *to, const Axis3f from, const float radian)
+static void rotateAxis3fZ(Axis3f *to, const Axis3f from, const float radian)
 {
 	const float ct = cos(radian);
 	const float st = sin(radian);

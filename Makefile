@@ -28,8 +28,8 @@ LPS_TDOA_ENABLE   ?= 0
 ######### Stabilizer configuration ##########
 ##### Sets the name of the stabilizer module to use.
 ESTIMATOR          ?= complementary
-CONTROLLER         ?= pid
-POWER_DISTRIBUTION ?= stock
+CONTROLLER         ?= lqr
+POWER_DISTRIBUTION ?= empty
 SENSORS 					 ?= cf2
 
 ######### Test activation ##########
