@@ -24,18 +24,21 @@ typedef struct lowPassFilter_s {
 
 static bool motorSetEnable = false;
 
+// Gains
 static float k_all = 1.0f;
-static float k1 = 47.99719007992099f;
-static float k2 = 136.1194381627157f;
-static float k3 = 22.3606797749979f;
-static float k4 = 15.8113883008419f; // 15.8113883008419
+static float k1 = 56.0698f;
+static float k2 =  5.0f;
+static float k3 =  7.0711f;
+static float k4 =  0.0f;
+
+// Gyro low pass filter
 static float alpha = 1/PI/7.0f*ATTITUDE_RATE;
 
 // START DEBUG
 static int32_t lqr[4] = {0, 0, 0, 0}; // LQR Controller Outputs
-static float roll_rad  = 0;  // Euler angles from States estimator
-static float pitch_rad = 0;
-static float yaw_rad   = 0;
+static float roll_deg  = 0;  // Euler angles from States estimator
+static float pitch_deg = 0;
+static float yaw_deg   = 0;
 // END DEBUG
 
 static struct {
@@ -87,17 +90,17 @@ void stateController(control_t *control, setpoint_t *setpoint,
 	if (RATE_DO_EXECUTE(ATTITUDE_RATE, tick)) {
 		updateLowPassFilter(&gyroLowPassFilter, sensors->gyro, alpha);
 
-		/*float p = sensors->gyro.x * DEG_TO_RAD; // gyro is in deg/sec
-		float q = sensors->gyro.y * DEG_TO_RAD;
-		float r = sensors->gyro.z * DEG_TO_RAD;*/
-
-		float p = gyroLowPassFilter.filtered.x * DEG_TO_RAD;
+		float p = gyroLowPassFilter.filtered.x * DEG_TO_RAD; // gyro is in deg/sec
 		float q = gyroLowPassFilter.filtered.y * DEG_TO_RAD;
 		float r = gyroLowPassFilter.filtered.z * DEG_TO_RAD;
 
-		roll_rad = state->attitude.roll * DEG_TO_RAD; // euler angles is in deg
-		pitch_rad = state->attitude.pitch * DEG_TO_RAD;
-		yaw_rad = state->attitude.yaw * DEG_TO_RAD;
+		roll_deg = state->attitude.roll;   // euler angles is in deg
+		pitch_deg = state->attitude.pitch; // euler angles is in deg
+		yaw_deg = state->attitude.yaw;     // euler angles is in deg
+
+		float roll_rad = roll_deg * DEG_TO_RAD;
+		float pitch_rad = pitch_deg * DEG_TO_RAD;
+		float yaw_rad = yaw_deg * DEG_TO_RAD;
 
 		/*command.pitch = -setpoint->velocity.x;
 		command.roll = setpoint->velocity.y;
@@ -212,7 +215,10 @@ LOG_ADD(LOG_FLOAT, yaw, &command.yaw)
 LOG_GROUP_STOP(lqrCommands)
 
 LOG_GROUP_START(lqrStates)
-LOG_ADD(LOG_FLOAT, roll_deg, &gyroLowPassFilter.filtered.x)
-LOG_ADD(LOG_FLOAT, pitch_deg, &gyroLowPassFilter.filtered.y)
-LOG_ADD(LOG_FLOAT, yaw_deg, &gyroLowPassFilter.filtered.z)
+LOG_ADD(LOG_FLOAT, gyro_roll_deg, &gyroLowPassFilter.filtered.x)
+LOG_ADD(LOG_FLOAT, gyro_pitch_deg, &gyroLowPassFilter.filtered.y)
+LOG_ADD(LOG_FLOAT, gyro_yaw_deg, &gyroLowPassFilter.filtered.z)
+LOG_ADD(LOG_FLOAT, euler_roll_deg, &roll_deg)
+LOG_ADD(LOG_FLOAT, euler_pitch_deg, &pitch_deg)
+LOG_ADD(LOG_FLOAT, euler_yaw_deg, &yaw_deg)
 LOG_GROUP_STOP(lqrStates)
