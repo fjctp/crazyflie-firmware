@@ -88,7 +88,12 @@ void stateController(control_t *control, setpoint_t *setpoint,
                                          const uint32_t tick)
 {
 	if (RATE_DO_EXECUTE(ATTITUDE_RATE, tick)) {
-		updateLowPassFilter(&gyroLowPassFilter, sensors->gyro, alpha);
+		Axis3f rate_gyro = {
+				.x=sensors->gyro.x,
+				.y=-1*sensors->gyro.y, // pitch rate is inverted
+				.z=sensors->gyro.z};
+
+		updateLowPassFilter(&gyroLowPassFilter, rate_gyro, alpha);
 
 		float p = gyroLowPassFilter.filtered.x * DEG_TO_RAD; // gyro is in deg/sec
 		float q = gyroLowPassFilter.filtered.y * DEG_TO_RAD;
@@ -98,9 +103,9 @@ void stateController(control_t *control, setpoint_t *setpoint,
 		pitch_deg = state->attitude.pitch; // euler angles is in deg
 		yaw_deg = state->attitude.yaw;     // euler angles is in deg
 
-		float roll_rad = roll_deg * DEG_TO_RAD;
-		float pitch_rad = pitch_deg * DEG_TO_RAD;
-		float yaw_rad = yaw_deg * DEG_TO_RAD;
+		float roll = roll_deg * DEG_TO_RAD;
+		float pitch = pitch_deg * DEG_TO_RAD;
+		float yaw = yaw_deg * DEG_TO_RAD;
 
 		/*command.pitch = -setpoint->velocity.x;
 		command.roll = setpoint->velocity.y;
@@ -124,23 +129,23 @@ void stateController(control_t *control, setpoint_t *setpoint,
 		}
 		else
 		{
-			lqr[0] = (int32_t) -1.0f*k_all*( k1*q - k2*r + k3*pitch_rad - k4*yaw_rad);
-			lqr[1] = (int32_t) -1.0f*k_all*(-k1*p + k2*r - k3*roll_rad  + k4*yaw_rad);
-			lqr[2] = (int32_t) -1.0f*k_all*(-k1*q - k2*r - k3*pitch_rad - k4*yaw_rad);
-			lqr[3] = (int32_t) -1.0f*k_all*( k1*p + k2*r + k3*roll_rad  + k4*yaw_rad);
+			lqr[0] = (int32_t) -1.0f*k_all*( k1*q - k2*r + k3*pitch - k4*yaw);
+			lqr[1] = (int32_t) -1.0f*k_all*(-k1*p + k2*r - k3*roll  + k4*yaw);
+			lqr[2] = (int32_t) -1.0f*k_all*(-k1*q - k2*r - k3*pitch - k4*yaw);
+			lqr[3] = (int32_t) -1.0f*k_all*( k1*p + k2*r + k3*roll  + k4*yaw);
 
 			motorPower.m1 = limitThrust(lqr[0] + setpoint->thrust
-			                                   - command.pitch
-			                                   + command.yaw);
-			motorPower.m2 = limitThrust(lqr[1] + setpoint->thrust
-			                                   - command.roll
-			                                   - command.yaw);
-			motorPower.m3 = limitThrust(lqr[2] + setpoint->thrust
 			                                   + command.pitch
-			                                   + command.yaw);
-			motorPower.m4 = limitThrust(lqr[3] + setpoint->thrust
-			                                   + command.roll
 			                                   - command.yaw);
+			motorPower.m2 = limitThrust(lqr[1] + setpoint->thrust
+			                                   + command.roll
+			                                   + command.yaw);
+			motorPower.m3 = limitThrust(lqr[2] + setpoint->thrust
+			                                   - command.pitch
+			                                   - command.yaw);
+			motorPower.m4 = limitThrust(lqr[3] + setpoint->thrust
+			                                   - command.roll
+			                                   + command.yaw);
 		}
 
 		setMotors(); // skip power_distribution module
