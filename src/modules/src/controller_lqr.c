@@ -24,22 +24,30 @@ typedef struct lowPassFilter_s {
 
 static bool motorSetEnable = false;
 
-// Gains
-static float k_all = 1.0f;
-static float k1 = 56.0698f;
-static float k2 =  5.0f;
-static float k3 =  7.0711f;
-static float k4 =  0.0f;
+// LQR gains
+static float lqr_kp     = 1446.116972692153f;
+static float lqr_kq     = 1479.600141759485f;
+static float lqr_kr     = 5429.071423864209f;
+static float lqr_kroll  = 8338.333333333342f;
+static float lqr_kpitch = 8338.333333333342f;
+static float lqr_kyaw   = 8338.333333333344f;
+
+// Command gain
+static float command_kroll	=  8338.333333333251f;
+static float command_kpitch	=  8338.333333333251f;
+static float command_kyaw	=  8338.333333333303f;
 
 // Gyro low pass filter
 static float alpha = 1/PI/7.0f*ATTITUDE_RATE;
 
-// START DEBUG
+// START LOGGING
 static int32_t lqr[4] = {0, 0, 0, 0}; // LQR Controller Outputs
 static float roll_deg  = 0;  // Euler angles from States estimator
 static float pitch_deg = 0;
 static float yaw_deg   = 0;
-// END DEBUG
+lowPassFilter_t gyroLowPassFilter;
+// END LOGGING
+
 
 static struct {
   float thrust;
@@ -61,8 +69,6 @@ static struct {
   uint16_t m3;
   uint16_t m4;
 } motorPowerSet;
-
-lowPassFilter_t gyroLowPassFilter;
 
 
 static void setMotors();
@@ -89,9 +95,9 @@ void stateController(control_t *control, setpoint_t *setpoint,
 {
 	if (RATE_DO_EXECUTE(ATTITUDE_RATE, tick)) {
 		Axis3f rate_gyro = {
-				.x=sensors->gyro.x,
-				.y=-1*sensors->gyro.y, // pitch rate is inverted
-				.z=sensors->gyro.z};
+				.x =  sensors->gyro.x,
+				.y = -sensors->gyro.y,  // pitch rate is inverted
+				.z = -sensors->gyro.z}; // model (z down), crazyflie (z up)
 
 		updateLowPassFilter(&gyroLowPassFilter, rate_gyro, alpha);
 
@@ -99,28 +105,27 @@ void stateController(control_t *control, setpoint_t *setpoint,
 		float q = gyroLowPassFilter.filtered.y * DEG_TO_RAD;
 		float r = gyroLowPassFilter.filtered.z * DEG_TO_RAD;
 
-		roll_deg = state->attitude.roll;   // euler angles is in deg
-		pitch_deg = state->attitude.pitch; // euler angles is in deg
-		yaw_deg = state->attitude.yaw;     // euler angles is in deg
+		roll_deg  =  state->attitude.roll;    // euler angles is in deg
+		pitch_deg =  state->attitude.pitch;
+		yaw_deg   = -state->attitude.yaw;     // model (z down), crazyflie (z up)
 
 		float roll = roll_deg * DEG_TO_RAD;
 		float pitch = pitch_deg * DEG_TO_RAD;
 		float yaw = yaw_deg * DEG_TO_RAD;
 
-		/*command.pitch = -setpoint->velocity.x;
-		command.roll = setpoint->velocity.y;
-		command.yaw = setpoint->velocity.z;*/
+		command.roll   =  setpoint->attitude.roll;
+		command.pitch  = -setpoint->attitude.pitch; // inverted
+		command.yaw    =  setpoint->attitudeRate.yaw;
+		command.thrust =  setpoint->thrust;
 
-		/*command.roll = setpoint->attitude.roll / (30.0f*100.0f);
-		command.pitch = setpoint->attitude.pitch / (30.0f*100.0f);
-		command.yaw = setpoint->attitude.yaw / (30.0f*100.0f);*/
+		// ROLL, PITCH, YAW, THROTTLE
+		float cmds[4] = {command.roll * DEG_TO_RAD * command_kroll,
+						 command.pitch * DEG_TO_RAD * command_kpitch,
+						 command.yaw * DEG_TO_RAD * command_kyaw,
+						 command.thrust};
 
-		command.thrust = setpoint->thrust;
-		command.roll = 0;
-		command.pitch = 0;
-		command.yaw = 0;
-
-		if (command.thrust < 500)
+		
+		if (command.thrust < 10)
 		{
 			motorPower.m1 = limitThrust(0);
 			motorPower.m2 = limitThrust(0);
@@ -129,23 +134,36 @@ void stateController(control_t *control, setpoint_t *setpoint,
 		}
 		else
 		{
-			lqr[0] = (int32_t) -1.0f*k_all*( k1*q - k2*r + k3*pitch - k4*yaw);
-			lqr[1] = (int32_t) -1.0f*k_all*(-k1*p + k2*r - k3*roll  + k4*yaw);
-			lqr[2] = (int32_t) -1.0f*k_all*(-k1*q - k2*r - k3*pitch - k4*yaw);
-			lqr[3] = (int32_t) -1.0f*k_all*( k1*p + k2*r + k3*roll  + k4*yaw);
+			
+#ifndef QUAD_FORMATION_X
+			lqr[0] = (int32_t) -1.0f*( lqr_kq*q + lqr_kr*r + lqr_kpitch*pitch + lqr_kyaw*yaw);
+			lqr[1] = (int32_t) -1.0f*(-lqr_kp*p - lqr_kr*r - lqr_kroll*roll   - lqr_kyaw*yaw);
+			lqr[2] = (int32_t) -1.0f*(-lqr_kq*q + lqr_kr*r - lqr_kpitch*pitch + lqr_kyaw*yaw);
+			lqr[3] = (int32_t) -1.0f*( lqr_kp*p - lqr_kr*r + lqr_kroll*roll   - lqr_kyaw*yaw);
 
-			motorPower.m1 = limitThrust(lqr[0] + setpoint->thrust
-			                                   + command.pitch
-			                                   - command.yaw);
-			motorPower.m2 = limitThrust(lqr[1] + setpoint->thrust
-			                                   + command.roll
-			                                   + command.yaw);
-			motorPower.m3 = limitThrust(lqr[2] + setpoint->thrust
-			                                   - command.pitch
-			                                   - command.yaw);
-			motorPower.m4 = limitThrust(lqr[3] + setpoint->thrust
-			                                   - command.roll
-			                                   + command.yaw);
+			motorPower.m1 = limitThrust(lqr[0] + cmds[3]
+			                                   + cmds[1]
+			                                   + cmds[2]);
+			motorPower.m2 = limitThrust(lqr[1] + cmds[3]
+			                                   - cmds[0]
+			                                   - cmds[2]);
+			motorPower.m3 = limitThrust(lqr[2] + cmds[3]
+			                                   - cmds[1]
+			                                   + cmds[2]);
+			motorPower.m4 = limitThrust(lqr[3] + cmds[3]
+			                                   + cmds[0]
+			                                   - cmds[2]);
+#else
+			lqr[0] = (int32_t) -1.0f*(-lqr_kp*p + lqr_kq*q + lqr_kr*r - lqr_kroll*roll + lqr_kpitch*pitch + lqr_kyaw*yaw);
+			lqr[1] = (int32_t) -1.0f*(-lqr_kp*p - lqr_kq*q - lqr_kr*r - lqr_kroll*roll - lqr_kpitch*pitch - lqr_kyaw*yaw);
+			lqr[2] = (int32_t) -1.0f*( lqr_kp*p - lqr_kq*q + lqr_kr*r + lqr_kroll*roll - lqr_kpitch*pitch + lqr_kyaw*yaw);
+			lqr[3] = (int32_t) -1.0f*( lqr_kp*p + lqr_kq*q - lqr_kr*r + lqr_kroll*roll + lqr_kpitch*pitch - lqr_kyaw*yaw);
+
+			motorPower.m1 = limitThrust(lqr[0] - cmds[0] + cmds[1] + cmds[2] + cmds[3]);
+			motorPower.m2 = limitThrust(lqr[1] - cmds[0] - cmds[1] - cmds[2] + cmds[3]);
+			motorPower.m3 = limitThrust(lqr[2] + cmds[0] - cmds[1] + cmds[2] + cmds[3]);
+			motorPower.m4 = limitThrust(lqr[3] + cmds[0] + cmds[1] - cmds[2] + cmds[3]);
+#endif
 		}
 
 		setMotors(); // skip power_distribution module
@@ -183,11 +201,19 @@ static void updateLowPassFilter(lowPassFilter_t *lowPassFilter, const Axis3f sen
 }
 
 PARAM_GROUP_START(lqrGain)
-PARAM_ADD(PARAM_FLOAT, kAll, &k_all)
-PARAM_ADD(PARAM_FLOAT, k1, &k1)
-PARAM_ADD(PARAM_FLOAT, k2, &k2)
-PARAM_ADD(PARAM_FLOAT, k3, &k3)
-PARAM_ADD(PARAM_FLOAT, k4, &k4)
+PARAM_ADD(PARAM_FLOAT, kp, &lqr_kp)
+PARAM_ADD(PARAM_FLOAT, kq, &lqr_kq)
+PARAM_ADD(PARAM_FLOAT, kr, &lqr_kr)
+PARAM_ADD(PARAM_FLOAT, kroll, &lqr_kroll)
+PARAM_ADD(PARAM_FLOAT, kpitch, &lqr_kpitch)
+PARAM_ADD(PARAM_FLOAT, kyaw, &lqr_kyaw)
+PARAM_GROUP_STOP(ring)
+
+
+PARAM_GROUP_START(lqrCommandGain)
+PARAM_ADD(PARAM_FLOAT, roll, &command_kroll)
+PARAM_ADD(PARAM_FLOAT, pitch, &command_kpitch)
+PARAM_ADD(PARAM_FLOAT, yaw, &command_kyaw)
 PARAM_GROUP_STOP(ring)
 
 PARAM_GROUP_START(motorPowerSet)

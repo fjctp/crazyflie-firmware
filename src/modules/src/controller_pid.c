@@ -17,6 +17,14 @@ static attitude_t attitudeDesired;
 static attitude_t rateDesired;
 static float actuatorThrust;
 
+static float roll = 0.0;
+static float pitch = 0.0;
+static float yaw = 0.0;
+
+static float roll_rate = 0.0;
+static float pitch_rate = 0.0;
+static float yaw_rate = 0.0;
+
 void stateControllerInit(void)
 {
   attitudeControllerInit(ATTITUDE_UPDATE_DT);
@@ -84,6 +92,14 @@ void stateController(control_t *control, setpoint_t *setpoint,
       attitudeControllerResetPitchAttitudePID();
     }
 
+    roll = state->attitude.roll;
+    pitch = state->attitude.pitch;
+    yaw = state->attitude.yaw;
+
+    roll_rate = sensors->gyro.x;
+    pitch_rate = -sensors->gyro.y;
+    yaw_rate = sensors->gyro.z;
+
     // TODO: Investigate possibility to subtract gyro drift.
     attitudeControllerCorrectRatePID(sensors->gyro.x, -sensors->gyro.y, sensors->gyro.z,
                              rateDesired.roll, rateDesired.pitch, rateDesired.yaw);
@@ -129,6 +145,15 @@ LOG_ADD(LOG_FLOAT, rollRate,  &rateDesired.roll)
 LOG_ADD(LOG_FLOAT, pitchRate, &rateDesired.pitch)
 LOG_ADD(LOG_FLOAT, yawRate,   &rateDesired.yaw)
 LOG_GROUP_STOP(controller)
+
+LOG_GROUP_START(pidSates)
+LOG_ADD(LOG_FLOAT, roll,      &roll)
+LOG_ADD(LOG_FLOAT, pitch,     &pitch)
+LOG_ADD(LOG_FLOAT, yaw,       &yaw)
+LOG_ADD(LOG_FLOAT, rollRate,  &roll_rate)
+LOG_ADD(LOG_FLOAT, pitchRate, &pitch_rate)
+LOG_ADD(LOG_FLOAT, yawRate,   &yaw_rate)
+LOG_GROUP_STOP(pidSates)
 
 PARAM_GROUP_START(controller)
 PARAM_ADD(PARAM_UINT8, tiltComp, &tiltCompensationEnabled)
