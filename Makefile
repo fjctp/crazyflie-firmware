@@ -10,27 +10,27 @@
 CFLAGS += $(EXTRA_CFLAGS)
 
 ######### JTAG and environment configuration ##########
-OPENOCD           ?= openocd
-OPENOCD_INTERFACE ?= interface/stlink-v2.cfg
-OPENOCD_CMDS      ?=
-CROSS_COMPILE     ?= arm-none-eabi-
-PYTHON2           ?= python2
-DFU_UTIL          ?= dfu-util
-CLOAD             ?= 1
-DEBUG             ?= 0
-CLOAD_SCRIPT      ?= python3 -m cfloader
-CLOAD_CMDS        ?=
-CLOAD_ARGS        ?=
-PLATFORM					?= CF2
-LPS_TDMA_ENABLE   ?= 0
-LPS_TDOA_ENABLE   ?= 0
+OPENOCD				?= openocd
+OPENOCD_INTERFACE	?= interface/stlink-v2.cfg
+OPENOCD_CMDS		?=
+CROSS_COMPILE		?= arm-none-eabi-
+PYTHON2				?= python2
+DFU_UTIL			?= dfu-util
+CLOAD				?= 1
+DEBUG				?= 0
+CLOAD_SCRIPT		?= python3 -m cfloader
+CLOAD_CMDS			?=
+CLOAD_ARGS			?=
+PLATFORM			?= CF2
+LPS_TDMA_ENABLE		?= 0
+LPS_TDOA_ENABLE		?= 0
 
 ######### Stabilizer configuration ##########
 ##### Sets the name of the stabilizer module to use.
-ESTIMATOR          ?= complementary
-CONTROLLER         ?= lqr
-POWER_DISTRIBUTION ?= empty
-SENSORS 					 ?= cf2
+ESTIMATOR			?= complementary
+CONTROLLER			?= lqr
+POWER_DISTRIBUTION	?= empty
+SENSORS				?= cf2
 
 ######### Test activation ##########
 FATFS_DISKIO_TESTS  ?= 0	# Set to 1 to enable FatFS diskio function tests. Erases card.
@@ -172,6 +172,9 @@ PROJ_OBJ += attitude_pid_controller.o sensfusion6.o stabilizer.o
 PROJ_OBJ += position_estimator_altitude.o position_controller_pid.o
 PROJ_OBJ += estimator_$(ESTIMATOR).o controller_$(CONTROLLER).o
 PROJ_OBJ += power_distribution_$(POWER_DISTRIBUTION).o
+ifeq ($(CONTROLLER), lqr)
+PROJ_OBJ += adaptive_controller.o
+endif
 
 
 # Deck Core

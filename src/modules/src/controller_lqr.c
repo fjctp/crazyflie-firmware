@@ -10,123 +10,114 @@
 #include "param.h"
 #include "num.h"
 
-#include "math.h"
+#include "FreeRTOS.h"
 #include "arm_math.h"
+
+#include "adaptive_controller.h"
 
 #define DEG_TO_RAD (PI/180.0f)
 #define RAD_TO_DEG (180.0f/PI)
 #define limitThrust(VAL) limitUint16(VAL)
 
-typedef struct lowPassFilter_s {
-	Axis3f sensors_last;
-	Axis3f filtered;
-} lowPassFilter_t;
-
-static bool motorSetEnable = false;
-
-// LQR gains
-static float lqr_kp     = 1446.116972692153f;
-static float lqr_kq     = 1479.600141759485f;
-static float lqr_kr     = 5429.071423864209f;
-static float lqr_kroll  = 8338.333333333342f;
-static float lqr_kpitch = 8338.333333333342f;
-static float lqr_kyaw   = 8338.333333333344f;
-
-// Command gain
-static float command_kroll	=  8338.333333333251f;
-static float command_kpitch	=  8338.333333333251f;
-static float command_kyaw	=  8338.333333333303f;
-
-// Gyro low pass filter
-static float alpha = 1/PI/7.0f*ATTITUDE_RATE;
-
-// START LOGGING
-static int32_t lqr[4] = {0, 0, 0, 0}; // LQR Controller Outputs
-static float roll_deg  = 0;  // Euler angles from States estimator
-static float pitch_deg = 0;
-static float yaw_deg   = 0;
-lowPassFilter_t gyroLowPassFilter;
-// END LOGGING
-
-
-static struct {
-  float thrust;
-  float roll;
-  float pitch;
-  float yaw;
-} command;
-
-static struct {
-  uint32_t m1;
-  uint32_t m2;
-  uint32_t m3;
-  uint32_t m4;
-} motorPower;
-
-static struct {
+typedef struct motorPower_s{
   uint16_t m1;
   uint16_t m2;
   uint16_t m3;
   uint16_t m4;
-} motorPowerSet;
+} motorPower_t;
 
+static bool motorSetEnable = false;
 
-static void setMotors();
-static void updateLowPassFilter(lowPassFilter_t *lowPassFilter, const Axis3f sensor, const float alpha);
+// LQR gains
+static float lqr_kp     = 5258.05006548232f;
+static float lqr_kq     = 5258.05006548232f;
+static float lqr_kr     = 8920.34704715925f;
+static float lqr_kroll  = 15811.38830084192f;
+static float lqr_kpitch = 15811.38830084192f;
+static float lqr_kyaw   = 15811.38830084192f;
+
+// Command gain
+static float command_kroll	=  15811.38830084192f;
+static float command_kpitch	=  15811.38830084192f;
+static float command_kyaw	=  15811.38830084192f;
+
+// START LOGGING
+static float lqr[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // LQR Controller Outputs
+static float fdfwd[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // Feedforward Controller Outputs
+static float adp[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+altitude_commands_t altitude_commands;
+lqr_states_t lqr_states;
+// END LOGGING
+
+static motorPower_t motorPower;
+static motorPower_t motorPowerSet;
+
+/**
+ * Supporting and utility functions
+ */
+static void setMotors(const motorPower_t *motorPower)
+{
+	motorsSetRatio(MOTOR_M1, motorPower->m1);
+	motorsSetRatio(MOTOR_M2, motorPower->m2);
+	motorsSetRatio(MOTOR_M3, motorPower->m3);
+	motorsSetRatio(MOTOR_M4, motorPower->m4);
+}
+
+static void updateLqrStates(lqr_states_t *lqr_x, const sensorData_t *sensors, const state_t *state, const uint32_t tick)
+{
+	// sensors and states are in deg
+	lqr_x->attitudeRate.roll 	=  sensors->gyro.x * DEG_TO_RAD;
+	lqr_x->attitudeRate.pitch	= -sensors->gyro.y * DEG_TO_RAD;
+	lqr_x->attitudeRate.yaw 	= -sensors->gyro.z * DEG_TO_RAD; // model (z down), crazyflie (z up)
+	lqr_x->attitude.roll 		=  state->attitude.roll * DEG_TO_RAD;
+	lqr_x->attitude.pitch		=  state->attitude.pitch * DEG_TO_RAD;
+	lqr_x->attitude.yaw 		= -state->attitude.yaw * DEG_TO_RAD; // model (z down), crazyflie (z up)
+
+	lqr_x->attitudeRate.timestamp = tick;
+	lqr_x->attitude.timestamp = tick;
+}
+static void updateLqrCommands(altitude_commands_t *alt_cmds, const setpoint_t *setpoint, const uint32_t tick)
+{
+	// Commands in Deg
+	alt_cmds->attitude.timestamp = tick;
+	alt_cmds->attitude.roll		=  setpoint->attitude.roll * DEG_TO_RAD;
+	alt_cmds->attitude.pitch	= -setpoint->attitude.pitch * DEG_TO_RAD; // inverted
+	alt_cmds->attitude.yaw		=  setpoint->attitudeRate.yaw * DEG_TO_RAD;
+	alt_cmds->thrust			=  setpoint->thrust;
+}
+
+/**
+ * stateController API
+ */
 
 void stateControllerInit(void)
 {
-	  motorsInit(motorMapDefaultBrushed);
+	motorsInit(motorMapDefaultBrushed);
+	adaptiveControllerInit();
 }
 
 bool stateControllerTest(void)
 {
-  bool pass = true;
+	bool pass = true;
 
-  pass &= motorsTest();
+	pass &= motorsTest();
+	pass &= adaptiveControllerTest();
 
-  return pass;
+	return pass;
 }
 
 void stateController(control_t *control, setpoint_t *setpoint,
-                                         const sensorData_t *sensors,
-                                         const state_t *state,
-                                         const uint32_t tick)
+					 const sensorData_t *sensors,
+					 const state_t *state,
+					 const uint32_t tick)
 {
 	if (RATE_DO_EXECUTE(ATTITUDE_RATE, tick)) {
-		Axis3f rate_gyro = {
-				.x =  sensors->gyro.x,
-				.y = -sensors->gyro.y,  // pitch rate is inverted
-				.z = -sensors->gyro.z}; // model (z down), crazyflie (z up)
+		updateLqrStates(&lqr_states, sensors, state, tick);
+		updateLqrCommands(&altitude_commands, setpoint, tick);
 
-		updateLowPassFilter(&gyroLowPassFilter, rate_gyro, alpha);
-
-		float p = gyroLowPassFilter.filtered.x * DEG_TO_RAD; // gyro is in deg/sec
-		float q = gyroLowPassFilter.filtered.y * DEG_TO_RAD;
-		float r = gyroLowPassFilter.filtered.z * DEG_TO_RAD;
-
-		roll_deg  =  state->attitude.roll;    // euler angles is in deg
-		pitch_deg =  state->attitude.pitch;
-		yaw_deg   = -state->attitude.yaw;     // model (z down), crazyflie (z up)
-
-		float roll = roll_deg * DEG_TO_RAD;
-		float pitch = pitch_deg * DEG_TO_RAD;
-		float yaw = yaw_deg * DEG_TO_RAD;
-
-		command.roll   =  setpoint->attitude.roll;
-		command.pitch  = -setpoint->attitude.pitch; // inverted
-		command.yaw    =  setpoint->attitudeRate.yaw;
-		command.thrust =  setpoint->thrust;
-
-		// ROLL, PITCH, YAW, THROTTLE
-		float cmds[4] = {command.roll * DEG_TO_RAD * command_kroll,
-						 command.pitch * DEG_TO_RAD * command_kpitch,
-						 command.yaw * DEG_TO_RAD * command_kyaw,
-						 command.thrust};
-
-		
-		if (command.thrust < 10)
+		if (altitude_commands.thrust < 10)
 		{
+			adaptiveControllerReset();
 			motorPower.m1 = limitThrust(0);
 			motorPower.m2 = limitThrust(0);
 			motorPower.m3 = limitThrust(0);
@@ -134,70 +125,40 @@ void stateController(control_t *control, setpoint_t *setpoint,
 		}
 		else
 		{
-			
-#ifndef QUAD_FORMATION_X
-			lqr[0] = (int32_t) -1.0f*( lqr_kq*q + lqr_kr*r + lqr_kpitch*pitch + lqr_kyaw*yaw);
-			lqr[1] = (int32_t) -1.0f*(-lqr_kp*p - lqr_kr*r - lqr_kroll*roll   - lqr_kyaw*yaw);
-			lqr[2] = (int32_t) -1.0f*(-lqr_kq*q + lqr_kr*r - lqr_kpitch*pitch + lqr_kyaw*yaw);
-			lqr[3] = (int32_t) -1.0f*( lqr_kp*p - lqr_kr*r + lqr_kroll*roll   - lqr_kyaw*yaw);
+			float p = lqr_states.attitudeRate.roll;
+			float q = lqr_states.attitudeRate.pitch;
+			float r = lqr_states.attitudeRate.yaw;
+			float roll = lqr_states.attitude.roll;
+			float pitch = lqr_states.attitude.pitch;
+			float yaw = lqr_states.attitude.yaw;
 
-			motorPower.m1 = limitThrust(lqr[0] + cmds[3]
-			                                   + cmds[1]
-			                                   + cmds[2]);
-			motorPower.m2 = limitThrust(lqr[1] + cmds[3]
-			                                   - cmds[0]
-			                                   - cmds[2]);
-			motorPower.m3 = limitThrust(lqr[2] + cmds[3]
-			                                   - cmds[1]
-			                                   + cmds[2]);
-			motorPower.m4 = limitThrust(lqr[3] + cmds[3]
-			                                   + cmds[0]
-			                                   - cmds[2]);
-#else
-			lqr[0] = (int32_t) -1.0f*(-lqr_kp*p + lqr_kq*q + lqr_kr*r - lqr_kroll*roll + lqr_kpitch*pitch + lqr_kyaw*yaw);
-			lqr[1] = (int32_t) -1.0f*(-lqr_kp*p - lqr_kq*q - lqr_kr*r - lqr_kroll*roll - lqr_kpitch*pitch - lqr_kyaw*yaw);
-			lqr[2] = (int32_t) -1.0f*( lqr_kp*p - lqr_kq*q + lqr_kr*r + lqr_kroll*roll - lqr_kpitch*pitch + lqr_kyaw*yaw);
-			lqr[3] = (int32_t) -1.0f*( lqr_kp*p + lqr_kq*q - lqr_kr*r + lqr_kroll*roll + lqr_kpitch*pitch - lqr_kyaw*yaw);
+			lqr[0] = -1.0f*(-lqr_kp*p + lqr_kq*q + lqr_kr*r - lqr_kroll*roll + lqr_kpitch*pitch + lqr_kyaw*yaw);
+			lqr[1] = -1.0f*(-lqr_kp*p - lqr_kq*q - lqr_kr*r - lqr_kroll*roll - lqr_kpitch*pitch - lqr_kyaw*yaw);
+			lqr[2] = -1.0f*( lqr_kp*p - lqr_kq*q + lqr_kr*r + lqr_kroll*roll - lqr_kpitch*pitch + lqr_kyaw*yaw);
+			lqr[3] = -1.0f*( lqr_kp*p + lqr_kq*q - lqr_kr*r + lqr_kroll*roll + lqr_kpitch*pitch - lqr_kyaw*yaw);
 
-			motorPower.m1 = limitThrust(lqr[0] - cmds[0] + cmds[1] + cmds[2] + cmds[3]);
-			motorPower.m2 = limitThrust(lqr[1] - cmds[0] - cmds[1] - cmds[2] + cmds[3]);
-			motorPower.m3 = limitThrust(lqr[2] + cmds[0] - cmds[1] + cmds[2] + cmds[3]);
-			motorPower.m4 = limitThrust(lqr[3] + cmds[0] + cmds[1] - cmds[2] + cmds[3]);
-#endif
+			// ROLL, PITCH, YAW, THROTTLE (Feed forward)
+			fdfwd[0] = altitude_commands.attitude.roll  * command_kroll;
+			fdfwd[1] = altitude_commands.attitude.pitch * command_kpitch;
+			fdfwd[2] = altitude_commands.attitude.yaw   * command_kyaw;
+			fdfwd[3] = altitude_commands.thrust;
+
+			adaptiveControllerUpdateModel(&lqr_states, &altitude_commands, tick);
+			adaptiveControllerUpdateGains(&lqr_states, &altitude_commands, tick);
+			adaptiveControllerComputeOutputs(adp);
+
+			motorPower.m1 = limitThrust( (int32_t) ( lqr[0] - fdfwd[0] + fdfwd[1] + fdfwd[2] + fdfwd[3] + adp[0] ));
+			motorPower.m2 = limitThrust( (int32_t) ( lqr[1] - fdfwd[0] - fdfwd[1] - fdfwd[2] + fdfwd[3] + adp[1] ));
+			motorPower.m3 = limitThrust( (int32_t) ( lqr[2] + fdfwd[0] - fdfwd[1] + fdfwd[2] + fdfwd[3] + adp[2] ));
+			motorPower.m4 = limitThrust( (int32_t) ( lqr[3] + fdfwd[0] + fdfwd[1] - fdfwd[2] + fdfwd[3] + adp[3] ));
 		}
 
-		setMotors(); // skip power_distribution module
+		// skip power_distribution module
+		if(motorSetEnable)
+			setMotors(&motorPowerSet);
+		else
+			setMotors(&motorPower);
 	}
-}
-
-static void setMotors()
-{
-	if (motorSetEnable)
-	{
-		motorsSetRatio(MOTOR_M1, motorPowerSet.m1);
-		motorsSetRatio(MOTOR_M2, motorPowerSet.m2);
-		motorsSetRatio(MOTOR_M3, motorPowerSet.m3);
-		motorsSetRatio(MOTOR_M4, motorPowerSet.m4);
-	}
-	else
-	{
-		motorsSetRatio(MOTOR_M1, motorPower.m1);
-		motorsSetRatio(MOTOR_M2, motorPower.m2);
-		motorsSetRatio(MOTOR_M3, motorPower.m3);
-		motorsSetRatio(MOTOR_M4, motorPower.m4);
-	}
-}
-
-static void updateLowPassFilter(lowPassFilter_t *lowPassFilter, const Axis3f sensor, const float alpha)
-{
-	lowPassFilter->filtered.x = ((alpha-1)*lowPassFilter->filtered.x +
-								(sensor.x+lowPassFilter->filtered.x))/(alpha+1);
-	lowPassFilter->filtered.y = ((alpha-1)*lowPassFilter->filtered.y +
-								(sensor.y+lowPassFilter->filtered.y))/(alpha+1);
-	lowPassFilter->filtered.z = ((alpha-1)*lowPassFilter->filtered.z +
-								(sensor.z+lowPassFilter->filtered.z))/(alpha+1);
-
-	lowPassFilter->sensors_last = sensor;
 }
 
 PARAM_GROUP_START(lqrGain)
@@ -208,7 +169,6 @@ PARAM_ADD(PARAM_FLOAT, kroll, &lqr_kroll)
 PARAM_ADD(PARAM_FLOAT, kpitch, &lqr_kpitch)
 PARAM_ADD(PARAM_FLOAT, kyaw, &lqr_kyaw)
 PARAM_GROUP_STOP(ring)
-
 
 PARAM_GROUP_START(lqrCommandGain)
 PARAM_ADD(PARAM_FLOAT, roll, &command_kroll)
@@ -225,31 +185,45 @@ PARAM_ADD(PARAM_UINT16, m4, &motorPowerSet.m4)
 PARAM_GROUP_STOP(ring)
 
 LOG_GROUP_START(motor)
-LOG_ADD(LOG_INT32, m4, &motorPower.m4)
 LOG_ADD(LOG_INT32, m1, &motorPower.m1)
 LOG_ADD(LOG_INT32, m2, &motorPower.m2)
 LOG_ADD(LOG_INT32, m3, &motorPower.m3)
+LOG_ADD(LOG_INT32, m4, &motorPower.m4)
 LOG_GROUP_STOP(motor)
 
 LOG_GROUP_START(lqrOutputs)
-LOG_ADD(LOG_INT32, m1, lqr+0)
-LOG_ADD(LOG_INT32, m2, lqr+1)
-LOG_ADD(LOG_INT32, m3, lqr+2)
-LOG_ADD(LOG_INT32, m4, lqr+3)
+LOG_ADD(LOG_FLOAT, m1, lqr+0)
+LOG_ADD(LOG_FLOAT, m2, lqr+1)
+LOG_ADD(LOG_FLOAT, m3, lqr+2)
+LOG_ADD(LOG_FLOAT, m4, lqr+3)
 LOG_GROUP_STOP(lqrOutputs)
 
+LOG_GROUP_START(fdfwdOutputs)
+LOG_ADD(LOG_FLOAT, m1, fdfwd+0)
+LOG_ADD(LOG_FLOAT, m2, fdfwd+1)
+LOG_ADD(LOG_FLOAT, m3, fdfwd+2)
+LOG_ADD(LOG_FLOAT, m4, fdfwd+3)
+LOG_GROUP_STOP(lqrOutputs)
+
+LOG_GROUP_START(adpOutputs)
+LOG_ADD(LOG_FLOAT, m1, adp+0)
+LOG_ADD(LOG_FLOAT, m2, adp+1)
+LOG_ADD(LOG_FLOAT, m3, adp+2)
+LOG_ADD(LOG_FLOAT, m4, adp+3)
+LOG_GROUP_STOP(adpOutputs)
+
 LOG_GROUP_START(lqrCommands)
-LOG_ADD(LOG_FLOAT, thrust, &command.thrust)
-LOG_ADD(LOG_FLOAT, roll, &command.roll)
-LOG_ADD(LOG_FLOAT, pitch, &command.pitch)
-LOG_ADD(LOG_FLOAT, yaw, &command.yaw)
+LOG_ADD(LOG_FLOAT, roll, &altitude_commands.attitude.roll)
+LOG_ADD(LOG_FLOAT, pitch, &altitude_commands.attitude.pitch)
+LOG_ADD(LOG_FLOAT, yaw, &altitude_commands.attitude.yaw)
+LOG_ADD(LOG_FLOAT, thrust, &altitude_commands.thrust)
 LOG_GROUP_STOP(lqrCommands)
 
 LOG_GROUP_START(lqrStates)
-LOG_ADD(LOG_FLOAT, gyro_roll_deg, &gyroLowPassFilter.filtered.x)
-LOG_ADD(LOG_FLOAT, gyro_pitch_deg, &gyroLowPassFilter.filtered.y)
-LOG_ADD(LOG_FLOAT, gyro_yaw_deg, &gyroLowPassFilter.filtered.z)
-LOG_ADD(LOG_FLOAT, euler_roll_deg, &roll_deg)
-LOG_ADD(LOG_FLOAT, euler_pitch_deg, &pitch_deg)
-LOG_ADD(LOG_FLOAT, euler_yaw_deg, &yaw_deg)
+LOG_ADD(LOG_FLOAT, p, &lqr_states.attitudeRate.roll)
+LOG_ADD(LOG_FLOAT, q, &lqr_states.attitudeRate.pitch)
+LOG_ADD(LOG_FLOAT, r, &lqr_states.attitudeRate.yaw)
+LOG_ADD(LOG_FLOAT, roll, &lqr_states.attitude.roll)
+LOG_ADD(LOG_FLOAT, pitch, &lqr_states.attitude.pitch)
+LOG_ADD(LOG_FLOAT, yaw, &lqr_states.attitude.yaw)
 LOG_GROUP_STOP(lqrStates)

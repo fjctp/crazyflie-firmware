@@ -171,6 +171,17 @@ typedef struct setpoint_s {
   } mode;
 } setpoint_t;
 
+/** LQR */
+typedef struct altitude_commands_s {
+  float thrust;
+  attitude_t attitude;
+} altitude_commands_t ;
+
+typedef struct lqr_states_s {
+  attitude_t attitude;
+  attitude_t attitudeRate;
+} lqr_states_t ;
+
 /** Estimate of position */
 typedef struct estimate_s {
   uint32_t timestamp; // Timestamp when the data was computed

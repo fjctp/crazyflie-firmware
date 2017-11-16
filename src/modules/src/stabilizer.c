@@ -47,7 +47,6 @@
 #include "estimator.h"
 #endif
 
-static const float rotationAngleZ = -0.78539816339; // -45 deg
 static bool isInit;
 static bool emergencyStop = false;
 static int emergencyStopTimeout = EMERGENCY_STOP_TIMEOUT_DISABLED;
@@ -59,11 +58,6 @@ static state_t state;
 static control_t control;
 
 static void stabilizerTask(void* param);
-
-#ifndef QUAD_FORMATION_X
-static void rotateSensorDataZ(sensorData_t *sensors, const float radian);
-static void rotateAxis3fZ(Axis3f *to, const Axis3f from, const float radian);
-#endif
 
 void stabilizerInit(void)
 {
@@ -137,7 +131,6 @@ static void stabilizerTask(void* param)
     stateEstimatorUpdate(&state, &sensorData, &control);
 #else
     sensorsAcquire(&sensorData, tick);
-    //rotateSensorDataZ(&sensorData, rotationAngleZ);
     stateEstimator(&state, &sensorData, tick);
 #endif
 
@@ -174,25 +167,6 @@ void stabilizerSetEmergencyStopTimeout(int timeout)
   emergencyStop = false;
   emergencyStopTimeout = timeout;
 }
-
-#ifndef QUAD_FORMATION_X
-static void rotateSensorDataZ(sensorData_t *sensors, const float radian)
-{
-	rotateAxis3fZ(&sensors->acc, sensors->acc, radian);
-	rotateAxis3fZ(&sensors->gyro, sensors->gyro, radian);
-	rotateAxis3fZ(&sensors->mag, sensors->mag, radian);
-}
-
-static void rotateAxis3fZ(Axis3f *to, const Axis3f from, const float radian)
-{
-	const float ct = cos(radian);
-	const float st = sin(radian);
-
-	(*to).x = ct*from.x + st*from.y;
-	(*to).y = -st*from.x + ct*from.y;
-	(*to).z = from.z;
-}
-#endif
 
 LOG_GROUP_START(ctrltarget)
 LOG_ADD(LOG_FLOAT, roll, &setpoint.attitude.roll)
